@@ -1,8 +1,9 @@
 /* tc- project's prefix*/
 .tc-wrap {
-  --color-background: #f9f9fb;
-  --color-text-secondary: #7b7e89;
-  --color-border: #e8e8eb;
+  /* 映射到 QNotes 主题变量（并保留 fallback，便于脱离宿主单独使用） */
+  --color-background: var(--control-bg, #f9f9fb);
+  --color-text-secondary: var(--text-muted, #7b7e89);
+  --color-border: var(--border, #e8e8eb);
   --cell-size: 34px;
   --toolbox-icon-size: 18px;
   --toolbox-padding: 6px;
@@ -10,6 +11,7 @@
     var(--toolbox-icon-size) + 2 * var(--toolbox-padding)
   );
 
+  color: var(--text, #1f2937);
   border-left: 0px;
   position: relative;
   height: 100%;

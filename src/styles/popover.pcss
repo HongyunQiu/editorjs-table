@@ -1,8 +1,10 @@
 .tc-popover {
-  --color-border: #eaeaea;
-  --color-background: #fff;
-  --color-background-hover: rgba(232,232,235,0.49);
-  --color-background-confirm: #e24a4a;
+  /* 映射到 QNotes 主题变量（并保留 fallback） */
+  --color-border: var(--border, #eaeaea);
+  --color-background: var(--surface, #fff);
+  --color-background-hover: var(--control-bg-hover, rgba(232,232,235,0.49));
+  --color-background-confirm: var(--danger, #e24a4a);
+  /* fallback + enhanced（深色下也不会发白） */
   --color-background-confirm-hover: #d54040;
   --color-text-confirm: #fff;
 
@@ -13,6 +15,7 @@
   padding: 6px;
   display: none;
   will-change: opacity, transform;
+  color: var(--text, #1f2937);
 
   &--opened {
     display: block;
