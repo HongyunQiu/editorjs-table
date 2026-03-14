@@ -15,6 +15,7 @@ import {
 const CSS = {
   wrapper: 'tc-wrap',
   wrapperReadOnly: 'tc-wrap--readonly',
+  copyHighlight: 'tc-wrap--copy-highlight',
   table: 'tc-table',
   row: 'tc-row',
   withHeadings: 'tc-table--heading',
@@ -69,6 +70,7 @@ export default class Table {
      */
     this.wrapper = null;
     this.table = null;
+    this.copyHighlightTimer = null;
 
     /**
      * Toolbox for managing of columns
@@ -721,11 +723,34 @@ export default class Table {
     const original = btn.innerHTML;
     btn.innerHTML = ICON_CHECK;
     btn.classList.add(CSS.copyButtonCopied);
+    this.flashCopyHighlight();
 
     window.setTimeout(() => {
       btn.innerHTML = original || IconClipboard;
       btn.classList.remove(CSS.copyButtonCopied);
     }, 900);
+  }
+
+  flashCopyHighlight() {
+    if (!this.wrapper) {
+      return;
+    }
+
+    if (this.copyHighlightTimer) {
+      window.clearTimeout(this.copyHighlightTimer);
+      this.copyHighlightTimer = null;
+    }
+
+    this.wrapper.classList.remove(CSS.copyHighlight);
+
+    window.requestAnimationFrame(() => {
+      this.wrapper.classList.add(CSS.copyHighlight);
+
+      this.copyHighlightTimer = window.setTimeout(() => {
+        this.wrapper.classList.remove(CSS.copyHighlight);
+        this.copyHighlightTimer = null;
+      }, 1500);
+    });
   }
 
   /**
