@@ -8,7 +8,8 @@ import {
   IconDirectionUpRight,
   IconDirectionDownRight,
   IconCross,
-  IconPlus
+  IconPlus,
+  IconClipboard
 } from '@codexteam/icons';
 
 const CSS = {
@@ -24,7 +25,11 @@ const CSS = {
   addRowDisabled: 'tc-add-row--disabled',
   addColumn: 'tc-add-column',
   addColumnDisabled: 'tc-add-column--disabled',
+  copyButton: 'tc-copy-btn',
+  copyButtonCopied: 'tc-copy-btn--copied',
 };
+
+const ICON_CHECK = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 6L9 17l-5-5"/></svg>';
 
 /**
  * @typedef {object} TableConfig
@@ -525,6 +530,202 @@ export default class Table {
       this.wrapper.appendChild(addColumnButton);
       this.wrapper.appendChild(addRowButton);
     }
+
+    this.createCopyButton();
+  }
+
+  /**
+   * Create "COPY" button overlay (doesn't affect layout height)
+   */
+  createCopyButton() {
+    const btn = $.make('button', CSS.copyButton, {
+      type: 'button',
+      innerHTML: IconClipboard,
+      ariaLabel: 'Copy table'
+    });
+    btn.dataset.mutationFree = 'true';
+
+    btn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void this.copyTableToClipboard(btn);
+    });
+
+    this.wrapper.appendChild(btn);
+  }
+
+  /**
+   * Copy table to clipboard in Excel-friendly format:
+   * - text/plain: TSV
+   * - text/html: <table>
+   *
+   * @param {HTMLButtonElement} btn
+   */
+  async copyTableToClipboard(btn) {
+    const matrix = this.getDataForCopy();
+    const tsv = this.toTSV(matrix);
+    const html = this.toHTMLTable(matrix, this.table.classList.contains(CSS.withHeadings));
+
+    try {
+      await this.writeToClipboard({ tsv, html });
+      this.flashCopied(btn);
+    } catch (e) {
+      /**
+       * Fallback for non-secure contexts (clipboard API restrictions)
+       */
+      this.execCopyFallback(tsv);
+      this.flashCopied(btn);
+    }
+  }
+
+  /**
+   * Get full table content (including empty rows) as plain text matrix.
+   *
+   * @returns {string[][]}
+   */
+  getDataForCopy() {
+    const rows = [];
+
+    for (let rowIndex = 1; rowIndex <= this.numberOfRows; rowIndex++) {
+      const row = this.getRow(rowIndex);
+      const cells = Array.from(row.querySelectorAll(`.${CSS.cell}`));
+
+      rows.push(cells.map((cell) => this.extractCellPlainText(cell)));
+    }
+
+    return rows;
+  }
+
+  /**
+   * @param {HTMLElement} cell
+   * @returns {string}
+   */
+  extractCellPlainText(cell) {
+    const text = (cell.innerText ?? cell.textContent ?? '')
+      .replace(/\u00a0/g, ' ')
+      .replace(/\r\n/g, '\n')
+      .replace(/\r/g, '\n');
+
+    return text.trim();
+  }
+
+  /**
+   * Convert matrix to TSV (Excel-friendly).
+   *
+   * @param {string[][]} matrix
+   * @returns {string}
+   */
+  toTSV(matrix) {
+    const escape = (value) => {
+      const v = (value ?? '')
+        .toString()
+        /**
+         * Keep TSV resilient for parsers that don't honor quoting.
+         * Newlines/tabs inside a cell can break row/column structure when pasting to Excel.
+         */
+        .replace(/\t/g, ' ')
+        .replace(/\r\n/g, '\n')
+        .replace(/\r/g, '\n')
+        .replace(/\n/g, ' ');
+      const needsQuotes = /[\t\n"]/.test(v);
+
+      if (!needsQuotes) {
+        return v;
+      }
+
+      return `"${v.replace(/"/g, '""')}"`;
+    };
+
+    return matrix
+      .map((row) => row.map(escape).join('\t'))
+      .join('\r\n');
+  }
+
+  /**
+   * Convert matrix to an HTML table string for rich paste.
+   *
+   * @param {string[][]} matrix
+   * @param {boolean} withHeadings
+   * @returns {string}
+   */
+  toHTMLTable(matrix, withHeadings) {
+    const table = document.createElement('table');
+    const tbody = document.createElement('tbody');
+
+    matrix.forEach((row, rowIndex) => {
+      const tr = document.createElement('tr');
+      const cellTag = withHeadings && rowIndex === 0 ? 'th' : 'td';
+
+      row.forEach((value) => {
+        const td = document.createElement(cellTag);
+        td.textContent = value ?? '';
+        tr.appendChild(td);
+      });
+
+      tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+    return table.outerHTML;
+  }
+
+  /**
+   * @param {{tsv: string, html: string}} payload
+   */
+  async writeToClipboard(payload) {
+    const { tsv, html } = payload;
+
+    if (navigator.clipboard?.write && window.ClipboardItem) {
+      const item = new ClipboardItem({
+        'text/plain': new Blob([tsv], { type: 'text/plain' }),
+        'text/html': new Blob([html], { type: 'text/html' }),
+      });
+
+      await navigator.clipboard.write([item]);
+      return;
+    }
+
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(tsv);
+      return;
+    }
+
+    throw new Error('Clipboard API not available');
+  }
+
+  /**
+   * Legacy fallback for clipboard write in non-secure contexts.
+   *
+   * @param {string} text
+   */
+  execCopyFallback(text) {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', 'true');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    textarea.style.pointerEvents = 'none';
+    textarea.style.left = '-9999px';
+    textarea.style.top = '0';
+
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    textarea.remove();
+  }
+
+  /**
+   * @param {HTMLButtonElement} btn
+   */
+  flashCopied(btn) {
+    const original = btn.innerHTML;
+    btn.innerHTML = ICON_CHECK;
+    btn.classList.add(CSS.copyButtonCopied);
+
+    window.setTimeout(() => {
+      btn.innerHTML = original || IconClipboard;
+      btn.classList.remove(CSS.copyButtonCopied);
+    }, 900);
   }
 
   /**

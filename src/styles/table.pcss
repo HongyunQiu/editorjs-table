@@ -43,6 +43,66 @@
   }
 }
 
+.tc-copy-btn {
+  position: absolute;
+  /* place it above the table (toolbox aiming field area), not over headings */
+  top: calc(-1 * var(--toolbox-aiming-field-size) + 4px);
+  right: 6px;
+  z-index: 3;
+
+  height: 22px;
+  width: calc(var(--cell-size) - 12px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  padding: 0;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-background);
+  color: var(--color-text-secondary);
+
+  line-height: 0;
+
+  cursor: pointer;
+  user-select: none;
+  opacity: 0;
+  transition: opacity 0.12s ease, color 0.12s ease, border-color 0.12s ease,
+    background-color 0.12s ease;
+
+  svg {
+    width: 14px;
+    height: 14px;
+    fill: none;
+    stroke: currentColor;
+    pointer-events: none;
+  }
+
+  &:hover {
+    color: var(--text, #1f2937);
+    border-color: currentColor;
+  }
+
+  &:active {
+    transform: translateY(1px);
+  }
+
+  &--copied {
+    color: var(--text, #1f2937);
+    border-color: currentColor;
+  }
+
+  @media print {
+    display: none;
+  }
+}
+
+.tc-wrap:hover .tc-copy-btn,
+.tc-wrap:focus-within .tc-copy-btn,
+.tc-wrap--readonly .tc-copy-btn {
+  opacity: 1;
+}
+
 .tc-table {
   position: relative;
   width: 100%;
