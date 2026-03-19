@@ -1,5 +1,6 @@
 import Table from './table';
 import * as $ from './utils/dom';
+import { buildPastedTableContent } from './pasteImageAssetization.mjs';
 
 import { IconTable, IconTableWithHeadings, IconTableWithoutHeadings, IconStretch, IconCollapse } from '@codexteam/icons';
 /**
@@ -197,32 +198,81 @@ export default class TableBlock {
   }
 
   /**
+   * Preserve inline formatting and uploaded images inside table cells
+   * when Editor.js sanitizes tool output during save().
+   *
+   * @returns {object}
+   */
+  static get sanitize() {
+    return {
+      content: {
+        br: true,
+        b: true,
+        strong: true,
+        i: true,
+        em: true,
+        u: true,
+        s: true,
+        mark: true,
+        code: true,
+        sub: true,
+        sup: true,
+        a: {
+          href: true,
+          target: true,
+          rel: true
+        },
+        img: {
+          src: true,
+          alt: true,
+          width: true,
+          height: true,
+          style: true
+        }
+      }
+    };
+  }
+
+  /**
+   * Build saved table data from pasted table HTML.
+   *
+   * Exposed as a static helper so host applications can intercept paste
+   * before Editor.js routes clipboard files to the image tool.
+   *
+   * @param {HTMLTableElement} table
+   * @param {object} config
+   * @returns {Promise<{withHeadings: boolean, content: string[][]}>}
+   */
+  static async buildPastedTableData(table, config = {}) {
+    const firstRowHeading = table.querySelector(':scope > thead, tr:first-of-type th');
+    const uploader = config && config.uploader ? config.uploader : {};
+    const content = await buildPastedTableContent(table, {
+      uploadByFile: uploader.uploadByFile,
+      uploadByUrl: uploader.uploadByUrl,
+      importLocalSrc: uploader.importLocalSrc,
+      clipboardFiles: config && config.clipboardFiles ? config.clipboardFiles : []
+    });
+
+    return {
+      withHeadings: firstRowHeading !== null,
+      content
+    };
+  }
+
+  /**
    * On paste callback that is fired from Editor
    *
    * @param {PasteEvent} event - event with pasted data
    */
-  onPaste(event) {
+  async onPaste(event) {
     const table = event.detail.data;
-
-    /** Check if the first row is a header */
-    const firstRowHeading = table.querySelector(':scope > thead, tr:first-of-type th');
-
-    /** Get all rows from the table */
-    const rows = Array.from(table.querySelectorAll('tr'));
-
-    /** Generate a content matrix */
-    const content = rows.map((row) => {
-      /** Get cells from row */
-      const cells = Array.from(row.querySelectorAll('th, td'))
-
-      /** Return cells content */
-      return cells.map((cell) => cell.innerHTML);
-    });
+    const pastedData = await TableBlock.buildPastedTableData(table, this.config);
 
     /** Update Tool's data */
     this.data = {
-      withHeadings: firstRowHeading !== null,
-      content
+      withHeadings: pastedData.withHeadings,
+      stretched: this.data.stretched,
+      content: pastedData.content
     };
 
     /** Update table block */

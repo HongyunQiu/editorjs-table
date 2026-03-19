@@ -1,6 +1,7 @@
 import Toolbox from './toolbox';
 import * as $ from './utils/dom';
 import throttled from './utils/throttled';
+import { assetizeTableCellElement, normalizeTableCellHtml } from './pasteImageAssetization.mjs';
 
 import {
   IconDirectionLeftDown,
@@ -21,7 +22,10 @@ const CSS = {
   withHeadings: 'tc-table--heading',
   rowSelected: 'tc-row--selected',
   cell: 'tc-cell',
+  cellMedia: 'tc-cell--media',
   cellSelected: 'tc-cell--selected',
+  cellFocus: 'tc-cell--focus',
+  cellDragFocus: 'tc-cell--drag-focus',
   addRow: 'tc-add-row',
   addRowDisabled: 'tc-add-row--disabled',
   addColumn: 'tc-add-column',
@@ -31,6 +35,100 @@ const CSS = {
 };
 
 const ICON_CHECK = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 6L9 17l-5-5"/></svg>';
+
+function extractImageFilesFromDataTransfer(dt) {
+  if (!dt) {
+    return [];
+  }
+
+  const out = [];
+  const seen = new Set();
+
+  const pushFile = (file) => {
+    if (!file || !file.type || !/^image\//i.test(String(file.type))) {
+      return;
+    }
+
+    const key = [
+      String(file.name || ''),
+      String(file.type || ''),
+      Number(file.size || 0)
+    ].join('::');
+
+    if (seen.has(key)) {
+      return;
+    }
+
+    seen.add(key);
+    out.push(file);
+  };
+
+  const items = dt.items ? Array.from(dt.items) : [];
+  items.forEach((item) => {
+    if (!item || item.kind !== 'file' || !/^image\//i.test(String(item.type || ''))) {
+      return;
+    }
+    const file = typeof item.getAsFile === 'function' ? item.getAsFile() : null;
+    pushFile(file);
+  });
+
+  const files = dt.files ? Array.from(dt.files) : [];
+  files.forEach((file) => pushFile(file));
+
+  return out;
+}
+
+function getUploader(config) {
+  const uploader = config && config.uploader && typeof config.uploader === 'object'
+    ? config.uploader
+    : null;
+
+  return uploader || {};
+}
+
+function getUploadedUrl(result) {
+  if (!result || typeof result !== 'object') {
+    return '';
+  }
+
+  if (result.file && typeof result.file.url === 'string' && result.file.url) {
+    return result.file.url;
+  }
+
+  if (typeof result.url === 'string' && result.url) {
+    return result.url;
+  }
+
+  return '';
+}
+
+function insertHtmlAtSelection(cell, html) {
+  const safeHtml = String(html || '');
+  if (!safeHtml) {
+    return;
+  }
+
+  const selection = window.getSelection && window.getSelection();
+  const range = selection && selection.rangeCount ? selection.getRangeAt(0) : null;
+
+  if (!range || !cell.contains(range.commonAncestorContainer)) {
+    cell.insertAdjacentHTML('beforeend', safeHtml);
+    return;
+  }
+
+  range.deleteContents();
+  const fragment = range.createContextualFragment(safeHtml);
+  const lastNode = fragment.lastChild;
+  range.insertNode(fragment);
+
+  if (lastNode && selection) {
+    const nextRange = document.createRange();
+    nextRange.setStartAfter(lastNode);
+    nextRange.collapse(true);
+    selection.removeAllRanges();
+    selection.addRange(nextRange);
+  }
+}
 
 /**
  * @typedef {object} TableConfig
@@ -119,6 +217,16 @@ export default class Table {
       column: 0
     };
 
+    this.lastFocusedCellEl = null;
+
+    /**
+     * When user drags text/images within the table cell, the browser emits a drop event
+     * that can bubble to Editor.js and create new blocks outside the table.
+     * Track internal drags so we can swallow propagation inside the table while
+     * keeping default contenteditable behavior (move/copy within cell).
+     */
+    this.internalDragActive = false;
+
     /**
      * Global click listener allows to delegate clicks on some elements
      */
@@ -145,6 +253,26 @@ export default class Table {
         this.hideToolboxes();
       }
     };
+
+    this.handleImageClick = (event) => {
+      const image = event.target.closest(`.${CSS.cell} img[src]`);
+
+      if (!image || !this.table.contains(image)) {
+        return;
+      }
+
+      const src = image.getAttribute('src');
+
+      if (!src || typeof window === 'undefined' || typeof window.open !== 'function') {
+        return;
+      }
+
+      event.preventDefault();
+      event.stopPropagation();
+      window.open(src, '_blank', 'noopener,noreferrer');
+    };
+
+    this.table.addEventListener('click', this.handleImageClick);
 
     if (!this.readOnly) {
       this.bindEvents();
@@ -178,6 +306,206 @@ export default class Table {
 
     // Determine the position of the cell in focus
     this.table.addEventListener('focusin', event => this.focusInTableListener(event));
+
+    /**
+     * Intercept image paste/drop inside table cells and assetize via uploader.
+     * This prevents massive data: payloads from being stored in cell HTML.
+     */
+    this.table.addEventListener('paste', (event) => {
+      void this.onPasteInCell(event);
+    }, true);
+
+    this.table.addEventListener('dragstart', (event) => this.onDragStartInTable(event), true);
+    this.table.addEventListener('dragend', () => {
+      this.internalDragActive = false;
+    }, true);
+
+    this.table.addEventListener('dragover', (event) => this.onDragOverInCell(event), true);
+    this.table.addEventListener('drop', (event) => {
+      void this.onDropInCell(event);
+    }, true);
+  }
+
+  swallowEditorDragEvent(event) {
+    if (!event) {
+      return;
+    }
+    event.stopPropagation();
+    if (typeof event.stopImmediatePropagation === 'function') {
+      event.stopImmediatePropagation();
+    }
+  }
+
+  onDragStartInTable(event) {
+    const cell = event && event.target && event.target.closest ? event.target.closest(`.${CSS.cell}`) : null;
+    if (!cell || !this.table || !this.table.contains(cell)) {
+      return;
+    }
+
+    this.internalDragActive = true;
+  }
+
+  /**
+   * @param {ClipboardEvent} event
+   */
+  async onPasteInCell(event) {
+    if (!event || !event.clipboardData) {
+      return;
+    }
+
+    const cell = event.target && event.target.closest ? event.target.closest(`.${CSS.cell}`) : null;
+    if (!cell || !this.table || !this.table.contains(cell)) {
+      return;
+    }
+
+    const uploader = getUploader(this.config);
+    const clipboardFiles = extractImageFilesFromDataTransfer(event.clipboardData);
+
+    if (clipboardFiles.length > 0 && typeof uploader.uploadByFile === 'function') {
+      event.preventDefault();
+      event.stopPropagation();
+      if (typeof event.stopImmediatePropagation === 'function') {
+        event.stopImmediatePropagation();
+      }
+
+      for (const file of clipboardFiles) {
+        try {
+          const result = await uploader.uploadByFile(file);
+          const url = getUploadedUrl(result);
+          if (url) {
+            insertHtmlAtSelection(cell, `<img src="${url}" alt="">`);
+          }
+        } catch (e) {
+          // ignore single upload failure; allow user to continue editing
+        }
+      }
+
+      this.syncCellMediaState(cell);
+      return;
+    }
+
+    /**
+     * If HTML paste contains images (data:/blob:/file:/http), allow the browser to paste
+     * and then rewrite the <img src> via assetization on the next tick.
+     */
+    const html = event.clipboardData.getData ? event.clipboardData.getData('text/html') : '';
+    if (html && /<img\b/i.test(html) && (typeof uploader.uploadByFile === 'function' || typeof uploader.uploadByUrl === 'function' || typeof uploader.importLocalSrc === 'function')) {
+      window.setTimeout(() => {
+        void assetizeTableCellElement(cell, {
+          uploadByFile: uploader.uploadByFile,
+          uploadByUrl: uploader.uploadByUrl,
+          importLocalSrc: uploader.importLocalSrc,
+          clipboardFiles
+        }).then(() => {
+          this.syncCellMediaState(cell);
+        }).catch(() => {
+          // ignore
+        });
+      }, 0);
+    }
+  }
+
+  onDragOverInCell(event) {
+    const dt = event && event.dataTransfer;
+    const cell = event && event.target && event.target.closest ? event.target.closest(`.${CSS.cell}`) : null;
+    if (!dt || !cell || !this.table || !this.table.contains(cell)) {
+      return;
+    }
+
+    // Never let Editor.js see dragover coming from inside the table.
+    this.swallowEditorDragEvent(event);
+
+    /**
+     * Important: browsers only allow dropping when dragover prevents default.
+     * For internal drags (text/image moved within the table), we want native
+     * contenteditable drop behavior inside the cell, but still must:
+     * - preventDefault() on dragover to "activate" the drop target
+     * - stopPropagation() so Editor.js won't create blocks outside
+     */
+    if (this.internalDragActive) {
+      event.preventDefault();
+      try {
+        dt.dropEffect = 'move';
+      } catch (_) {}
+      try {
+        if (typeof cell.focus === 'function') {
+          cell.focus();
+        }
+      } catch (_) {}
+      return;
+    }
+
+    const types = dt.types ? Array.from(dt.types) : [];
+    const hasFiles = types.includes('Files') || (dt.files && dt.files.length > 0);
+
+    if (hasFiles) {
+      event.preventDefault();
+      try {
+        dt.dropEffect = 'copy';
+      } catch (_) {}
+    }
+  }
+
+  /**
+   * @param {DragEvent} event
+   */
+  async onDropInCell(event) {
+    const dt = event && event.dataTransfer;
+    const cell = event && event.target && event.target.closest ? event.target.closest(`.${CSS.cell}`) : null;
+    if (!dt || !cell || !this.table || !this.table.contains(cell)) {
+      return;
+    }
+
+    // Always swallow so Editor.js won't insert a new block outside the table.
+    this.swallowEditorDragEvent(event);
+
+    const uploader = getUploader(this.config);
+    const files = extractImageFilesFromDataTransfer(dt);
+
+    // Internal drag within the table: keep native contenteditable drop behavior.
+    // Do NOT attempt uploadByUrl/uploadByFile based on DataTransfer text/html.
+    if (this.internalDragActive) {
+      this.internalDragActive = false;
+      return;
+    }
+
+    if (files.length > 0 && typeof uploader.uploadByFile === 'function') {
+      event.preventDefault();
+
+      for (const file of files) {
+        try {
+          const result = await uploader.uploadByFile(file);
+          const url = getUploadedUrl(result);
+          if (url) {
+            insertHtmlAtSelection(cell, `<img src="${url}" alt="">`);
+          }
+        } catch (e) {
+          // ignore
+        }
+      }
+
+      this.syncCellMediaState(cell);
+      return;
+    }
+
+    const uriList = (typeof dt.getData === 'function' ? dt.getData('text/uri-list') : '') || '';
+    const text = (typeof dt.getData === 'function' ? dt.getData('text/plain') : '') || '';
+    const candidate = String(uriList || text || '').trim();
+
+    if (candidate && /^https?:\/\//i.test(candidate) && typeof uploader.uploadByUrl === 'function') {
+      event.preventDefault();
+
+      try {
+        const result = await uploader.uploadByUrl(candidate);
+        const url = getUploadedUrl(result);
+        if (url) {
+          insertHtmlAtSelection(cell, `<img src="${url}" alt="">`);
+          this.syncCellMediaState(cell);
+        }
+      } catch (_) {
+        // ignore
+      }
+    }
   }
 
   /**
@@ -357,7 +685,19 @@ export default class Table {
   setCellContent(row, column, content) {
     const cell = this.getCell(row, column);
 
-    cell.innerHTML = content;
+    cell.innerHTML = normalizeTableCellHtml(content);
+    this.syncCellMediaState(cell);
+  }
+
+  /**
+   * Applies a stable media state to cells that contain images.
+   *
+   * @param {HTMLElement} cell - cell element
+   */
+  syncCellMediaState(cell) {
+    const hasImage = cell.querySelector('img') !== null;
+
+    cell.classList.toggle(CSS.cellMedia, hasImage);
   }
 
   /**
@@ -931,6 +1271,17 @@ export default class Table {
     const cell = event.target;
     const row = this.getRowByCell(cell);
 
+    if (this.lastFocusedCellEl && this.lastFocusedCellEl.classList) {
+      this.lastFocusedCellEl.classList.remove(CSS.cellFocus);
+    }
+
+    if (cell && cell.classList) {
+      cell.classList.add(CSS.cellFocus);
+      this.lastFocusedCellEl = cell;
+    } else {
+      this.lastFocusedCellEl = null;
+    }
+
     this.focusedCell = {
       row: Array.from(this.table.querySelectorAll(`.${CSS.row}`)).indexOf(row) + 1,
       column: Array.from(row.querySelectorAll(`.${CSS.cell}`)).indexOf(cell) + 1
@@ -1233,5 +1584,9 @@ export default class Table {
    */
   destroy() {
     document.removeEventListener('click', this.documentClicked);
+    this.table.removeEventListener('click', this.handleImageClick);
+    if (this.lastFocusedCellEl && this.lastFocusedCellEl.classList) {
+      this.lastFocusedCellEl.classList.remove(CSS.cellFocus);
+    }
   }
 }
