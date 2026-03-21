@@ -32,6 +32,12 @@ const CSS = {
   addColumnDisabled: 'tc-add-column--disabled',
   copyButton: 'tc-copy-btn',
   copyButtonCopied: 'tc-copy-btn--copied',
+  imagePreview: 'tc-image-preview',
+  imagePreviewOpen: 'tc-image-preview--open',
+  imagePreviewBackdrop: 'tc-image-preview__backdrop',
+  imagePreviewDialog: 'tc-image-preview__dialog',
+  imagePreviewImage: 'tc-image-preview__image',
+  imagePreviewClose: 'tc-image-preview__close',
 };
 
 const ICON_CHECK = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" fill="none" viewBox="0 0 24 24"><path stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 6L9 17l-5-5"/></svg>';
@@ -169,6 +175,10 @@ export default class Table {
     this.wrapper = null;
     this.table = null;
     this.copyHighlightTimer = null;
+    this.imagePreview = null;
+    this.imagePreviewImage = null;
+    this.previousActiveElement = null;
+    this.previousBodyOverflow = '';
 
     /**
      * Toolbox for managing of columns
@@ -263,13 +273,37 @@ export default class Table {
 
       const src = image.getAttribute('src');
 
-      if (!src || typeof window === 'undefined' || typeof window.open !== 'function') {
+      if (!src) {
         return;
       }
 
       event.preventDefault();
       event.stopPropagation();
-      window.open(src, '_blank', 'noopener,noreferrer');
+      this.openImagePreview(src, image.getAttribute('alt') || '');
+    };
+
+    this.onImagePreviewClick = (event) => {
+      if (!this.imagePreview || !this.imagePreview.classList.contains(CSS.imagePreviewOpen)) {
+        return;
+      }
+
+      const clickedBackdrop = event.target === this.imagePreview;
+      const clickedBackdropLayer = event.target.closest(`.${CSS.imagePreviewBackdrop}`) !== null;
+      const clickedClose = event.target.closest(`.${CSS.imagePreviewClose}`) !== null;
+
+      if (clickedBackdrop || clickedBackdropLayer || clickedClose) {
+        event.preventDefault();
+        this.closeImagePreview();
+      }
+    };
+
+    this.onImagePreviewKeyDown = (event) => {
+      if (event.key !== 'Escape') {
+        return;
+      }
+
+      event.preventDefault();
+      this.closeImagePreview();
     };
 
     this.table.addEventListener('click', this.handleImageClick);
@@ -286,6 +320,100 @@ export default class Table {
    */
   getWrapper() {
     return this.wrapper;
+  }
+
+  ensureImagePreview() {
+    if (this.imagePreview || typeof document === 'undefined') {
+      return;
+    }
+
+    const overlay = $.make('div', CSS.imagePreview, {
+      tabIndex: -1
+    });
+    const backdrop = $.make('div', CSS.imagePreviewBackdrop);
+    const dialog = $.make('div', CSS.imagePreviewDialog, {
+      role: 'dialog',
+      ariaModal: true,
+      ariaLabel: '图片预览'
+    });
+    const closeButton = $.make('button', CSS.imagePreviewClose, {
+      type: 'button',
+      innerHTML: '&times;',
+      ariaLabel: '关闭图片预览',
+      title: '关闭'
+    });
+    const previewImage = $.make('img', CSS.imagePreviewImage, {
+      alt: ''
+    });
+
+    dialog.appendChild(closeButton);
+    dialog.appendChild(previewImage);
+    overlay.appendChild(backdrop);
+    overlay.appendChild(dialog);
+    overlay.addEventListener('click', this.onImagePreviewClick);
+
+    this.imagePreview = overlay;
+    this.imagePreviewImage = previewImage;
+  }
+
+  openImagePreview(src, alt = '') {
+    if (!src || typeof document === 'undefined') {
+      return;
+    }
+
+    this.ensureImagePreview();
+
+    if (!this.imagePreview || !this.imagePreviewImage) {
+      return;
+    }
+
+    if (!this.imagePreview.isConnected) {
+      document.body.appendChild(this.imagePreview);
+    }
+
+    this.previousActiveElement = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+
+    this.imagePreviewImage.src = src;
+    this.imagePreviewImage.alt = alt || '表格图片预览';
+    this.imagePreview.classList.add(CSS.imagePreviewOpen);
+    document.addEventListener('keydown', this.onImagePreviewKeyDown);
+
+    if (document.body) {
+      this.previousBodyOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+    }
+
+    this.imagePreview.focus();
+  }
+
+  closeImagePreview() {
+    if (!this.imagePreview) {
+      return;
+    }
+
+    this.imagePreview.classList.remove(CSS.imagePreviewOpen);
+    document.removeEventListener('keydown', this.onImagePreviewKeyDown);
+
+    if (document.body) {
+      document.body.style.overflow = this.previousBodyOverflow;
+    }
+
+    if (this.imagePreviewImage) {
+      this.imagePreviewImage.removeAttribute('src');
+    }
+
+    if (this.imagePreview.isConnected) {
+      this.imagePreview.remove();
+    }
+
+    if (this.previousActiveElement && typeof this.previousActiveElement.focus === 'function') {
+      this.previousActiveElement.focus();
+    }
+
+    this.previousActiveElement = null;
+    this.previousBodyOverflow = '';
   }
 
   /**
@@ -904,9 +1032,10 @@ export default class Table {
    * @param {HTMLButtonElement} btn
    */
   async copyTableToClipboard(btn) {
-    const matrix = this.getDataForCopy();
-    const tsv = this.toTSV(matrix);
-    const html = this.toHTMLTable(matrix, this.table.classList.contains(CSS.withHeadings));
+    const textMatrix = this.getDataForCopy();
+    const htmlMatrix = this.getHtmlForCopy();
+    const tsv = this.toTSV(textMatrix);
+    const html = this.toHTMLTable(htmlMatrix, this.table.classList.contains(CSS.withHeadings), { cellsAreHtml: true });
 
     try {
       await this.writeToClipboard({ tsv, html });
@@ -933,6 +1062,25 @@ export default class Table {
       const cells = Array.from(row.querySelectorAll(`.${CSS.cell}`));
 
       rows.push(cells.map((cell) => this.extractCellPlainText(cell)));
+    }
+
+    return rows;
+  }
+
+  /**
+   * Get full table content (including empty rows) as HTML matrix.
+   * Used for rich clipboard copy so images (<img>) are preserved.
+   *
+   * @returns {string[][]}
+   */
+  getHtmlForCopy() {
+    const rows = [];
+
+    for (let rowIndex = 1; rowIndex <= this.numberOfRows; rowIndex++) {
+      const row = this.getRow(rowIndex);
+      const cells = Array.from(row.querySelectorAll(`.${CSS.cell}`));
+
+      rows.push(cells.map((cell) => (cell && typeof cell.innerHTML === 'string' ? cell.innerHTML : '')));
     }
 
     return rows;
@@ -990,9 +1138,10 @@ export default class Table {
    * @param {boolean} withHeadings
    * @returns {string}
    */
-  toHTMLTable(matrix, withHeadings) {
+  toHTMLTable(matrix, withHeadings, options = {}) {
     const table = document.createElement('table');
     const tbody = document.createElement('tbody');
+    const cellsAreHtml = !!(options && options.cellsAreHtml);
 
     matrix.forEach((row, rowIndex) => {
       const tr = document.createElement('tr');
@@ -1000,7 +1149,11 @@ export default class Table {
 
       row.forEach((value) => {
         const td = document.createElement(cellTag);
-        td.textContent = value ?? '';
+        if (cellsAreHtml) {
+          td.innerHTML = value ?? '';
+        } else {
+          td.textContent = value ?? '';
+        }
         tr.appendChild(td);
       });
 
@@ -1585,6 +1738,11 @@ export default class Table {
   destroy() {
     document.removeEventListener('click', this.documentClicked);
     this.table.removeEventListener('click', this.handleImageClick);
+    document.removeEventListener('keydown', this.onImagePreviewKeyDown);
+    this.closeImagePreview();
+    if (this.imagePreview) {
+      this.imagePreview.removeEventListener('click', this.onImagePreviewClick);
+    }
     if (this.lastFocusedCellEl && this.lastFocusedCellEl.classList) {
       this.lastFocusedCellEl.classList.remove(CSS.cellFocus);
     }

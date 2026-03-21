@@ -319,7 +319,8 @@
     width: auto;
     height: auto;
     object-fit: contain;
-    margin: 0 auto;
+    /* QNotes: images align to the left within cells */
+    margin: 0;
     border-radius: 6px;
     cursor: zoom-in;
   }
@@ -348,4 +349,74 @@
 
 .tc-wrap--readonly .tc-row::after {
   display: none;
+}
+
+.tc-image-preview {
+  position: fixed;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 9999;
+
+  &--open {
+    display: flex;
+  }
+
+  &__backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 23, 42, 0.72);
+    backdrop-filter: blur(2px);
+  }
+
+  &__dialog {
+    position: relative;
+    z-index: 1;
+    max-width: min(92vw, 1200px);
+    max-height: 92vh;
+    padding: 16px;
+    border-radius: 16px;
+    background: color-mix(in srgb, var(--surface, #fff) 92%, transparent);
+    box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  &__image {
+    display: block;
+    max-width: min(88vw, 1160px);
+    max-height: calc(92vh - 32px);
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    border-radius: 10px;
+    background: transparent;
+  }
+
+  &__close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 36px;
+    height: 36px;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.68);
+    color: #fff;
+    font-size: 28px;
+    line-height: 1;
+    cursor: pointer;
+  }
+
+  &__close:hover {
+    background: rgba(15, 23, 42, 0.82);
+  }
+
+  &__close:focus-visible {
+    outline: 2px solid #fff;
+    outline-offset: 2px;
+  }
 }
