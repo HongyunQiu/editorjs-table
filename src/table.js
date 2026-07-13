@@ -1256,7 +1256,11 @@ export default class Table {
     const isValidArray = Array.isArray(content);
     const isNotEmptyArray = isValidArray ? content.length : false;
     const contentRows = isValidArray ? content.length : undefined;
-    const contentCols = isNotEmptyArray ? content[0].length : undefined;
+    const contentCols = isNotEmptyArray
+      ? content.reduce((max, row) => {
+        return Array.isArray(row) ? Math.max(max, row.length) : max;
+      }, 0)
+      : undefined;
     const parsedRows = Number.parseInt(this.config && this.config.rows);
     const parsedCols = Number.parseInt(this.config && this.config.cols);
 

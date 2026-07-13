@@ -247,6 +247,13 @@ test('table source normalizes excel image wrappers before rendering saved cell h
   assert.match(tableSource, /normalizeTableCellHtml/);
 });
 
+test('table source sizes ragged saved content by the widest row', () => {
+  const tableSource = fs.readFileSync(path.join(process.cwd(), 'src', 'table.js'), 'utf8');
+
+  assert.match(tableSource, /content\.reduce\(\(max,\s*row\)/);
+  assert.match(tableSource, /Array\.isArray\(row\)\s*\?\s*Math\.max\(max,\s*row\.length\)/);
+});
+
 test('keeps original cell HTML when no uploader is configured', async () => {
   const table = createTable(`
     <table>
