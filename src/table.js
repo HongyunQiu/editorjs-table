@@ -26,6 +26,8 @@ const CSS = {
   cellSelected: 'tc-cell--selected',
   cellFocus: 'tc-cell--focus',
   cellDragFocus: 'tc-cell--drag-focus',
+  columnResizeHandle: 'tc-column-resize-handle',
+  columnResizing: 'tc-wrap--column-resizing',
   addRow: 'tc-add-row',
   addRowDisabled: 'tc-add-row--disabled',
   addColumn: 'tc-add-column',
@@ -179,6 +181,8 @@ export default class Table {
     this.imagePreviewImage = null;
     this.previousActiveElement = null;
     this.previousBodyOverflow = '';
+    this.colWidths = Array.isArray(data && data.colWidths) ? data.colWidths.slice() : [];
+    this.columnResizeState = null;
 
     /**
      * Toolbox for managing of columns
@@ -217,6 +221,8 @@ export default class Table {
      * Fill the table with data
      */
     this.fill();
+    this.applyColumnLayout();
+    this.syncColumnResizeHandles();
 
     /**
      * The cell in which the focus is currently located, if 0 and 0 then there is no focus
@@ -305,6 +311,9 @@ export default class Table {
       event.preventDefault();
       this.closeImagePreview();
     };
+
+    this.onColumnResizeMove = (event) => this.handleColumnResizeMove(event);
+    this.onColumnResizeEnd = () => this.stopColumnResize();
 
     this.table.addEventListener('click', this.handleImageClick);
 
@@ -828,6 +837,147 @@ export default class Table {
     cell.classList.toggle(CSS.cellMedia, hasImage);
   }
 
+  getColumnTemplate() {
+    const columns = this.numberOfColumns;
+    const widths = this.normalizeColumnWidths(columns);
+
+    if (!widths || widths.length !== columns) {
+      return 'repeat(auto-fit, minmax(10px, 1fr))';
+    }
+
+    return widths.map((width) => `${width}px`).join(' ');
+  }
+
+  normalizeColumnWidths(columns) {
+    if (!columns || !Array.isArray(this.colWidths) || this.colWidths.length !== columns) {
+      return null;
+    }
+
+    const widths = this.colWidths.map((width) => Number(width));
+
+    return widths.every((width) => Number.isFinite(width) && width > 0) ? widths : null;
+  }
+
+  applyColumnLayout() {
+    if (!this.table) {
+      return;
+    }
+
+    const template = this.getColumnTemplate();
+
+    for (let rowIndex = 1; rowIndex <= this.numberOfRows; rowIndex++) {
+      const row = this.getRow(rowIndex);
+
+      if (row) {
+        row.style.gridTemplateColumns = template;
+      }
+    }
+  }
+
+  captureCurrentColumnWidths() {
+    const firstRow = this.getRow(1);
+    const cells = firstRow ? Array.from(firstRow.querySelectorAll(`.${CSS.cell}`)) : [];
+
+    return cells.map((cell) => Math.max(40, Math.round(cell.getBoundingClientRect().width || 0)));
+  }
+
+  syncColumnResizeHandles() {
+    if (!this.table) {
+      return;
+    }
+
+    this.table.querySelectorAll(`.${CSS.columnResizeHandle}`).forEach((handle) => handle.remove());
+
+    if (this.readOnly || this.numberOfColumns < 2) {
+      return;
+    }
+
+    for (let rowIndex = 1; rowIndex <= this.numberOfRows; rowIndex++) {
+      const row = this.getRow(rowIndex);
+      const cells = row ? Array.from(row.querySelectorAll(`.${CSS.cell}`)) : [];
+
+      cells.forEach((cell, cellIndex) => {
+        if (cellIndex >= this.numberOfColumns - 1) {
+          return;
+        }
+
+        const handle = $.make('span', CSS.columnResizeHandle, {
+          contentEditable: false,
+          role: 'separator',
+          ariaOrientation: 'vertical',
+          title: '拖动调整列宽'
+        });
+
+        handle.dataset.mutationFree = 'true';
+        handle.dataset.columnIndex = String(cellIndex);
+        handle.addEventListener('pointerdown', (event) => this.startColumnResize(event, cellIndex));
+        cell.appendChild(handle);
+      });
+    }
+  }
+
+  startColumnResize(event, columnIndex) {
+    if (this.readOnly || columnIndex < 0 || columnIndex >= this.numberOfColumns - 1) {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    const widths = this.normalizeColumnWidths(this.numberOfColumns) || this.captureCurrentColumnWidths();
+
+    this.columnResizeState = {
+      columnIndex,
+      startX: event.clientX,
+      startWidths: widths,
+      pointerId: event.pointerId
+    };
+    this.wrapper.classList.add(CSS.columnResizing);
+
+    try {
+      event.currentTarget.setPointerCapture(event.pointerId);
+    } catch (_) {}
+
+    document.addEventListener('pointermove', this.onColumnResizeMove);
+    document.addEventListener('pointerup', this.onColumnResizeEnd);
+    document.addEventListener('pointercancel', this.onColumnResizeEnd);
+  }
+
+  handleColumnResizeMove(event) {
+    if (!this.columnResizeState) {
+      return;
+    }
+
+    event.preventDefault();
+
+    const minWidth = 40;
+    const { columnIndex, startX, startWidths } = this.columnResizeState;
+    const delta = event.clientX - startX;
+    const leftStart = startWidths[columnIndex];
+    const rightStart = startWidths[columnIndex + 1];
+    const maxDelta = rightStart - minWidth;
+    const minDelta = minWidth - leftStart;
+    const clampedDelta = Math.max(minDelta, Math.min(maxDelta, delta));
+    const nextWidths = startWidths.slice();
+
+    nextWidths[columnIndex] = Math.round(leftStart + clampedDelta);
+    nextWidths[columnIndex + 1] = Math.round(rightStart - clampedDelta);
+    this.colWidths = nextWidths;
+    this.applyColumnLayout();
+  }
+
+  stopColumnResize() {
+    if (!this.columnResizeState) {
+      return;
+    }
+
+    this.columnResizeState = null;
+    this.wrapper.classList.remove(CSS.columnResizing);
+    document.removeEventListener('pointermove', this.onColumnResizeMove);
+    document.removeEventListener('pointerup', this.onColumnResizeEnd);
+    document.removeEventListener('pointercancel', this.onColumnResizeEnd);
+  }
+
   /**
    * Add column in table on index place
    * Add cells in each row
@@ -877,6 +1027,13 @@ export default class Table {
       addColButton.classList.add(CSS.addColumnDisabled);
     }
     this.addHeadingAttrToFirstRow();
+    if (Array.isArray(this.colWidths) && this.colWidths.length > 0 && this.colWidths.length === numberOfColumns) {
+      const insertAt = columnIndex > 0 && columnIndex <= numberOfColumns ? columnIndex - 1 : numberOfColumns;
+      const fallbackWidth = this.colWidths[insertAt - 1] || this.colWidths[insertAt] || 120;
+      this.colWidths.splice(insertAt, 0, fallbackWidth);
+    }
+    this.applyColumnLayout();
+    this.syncColumnResizeHandles();
   };
 
   /**
@@ -932,6 +1089,8 @@ export default class Table {
     if (this.config && this.config.maxrows && this.numberOfRows >= this.config.maxrows && addRowButton) {
       addRowButton.classList.add(CSS.addRowDisabled);
     }
+    this.applyColumnLayout();
+    this.syncColumnResizeHandles();
     return insertedRow;
   };
 
@@ -950,6 +1109,11 @@ export default class Table {
 
       cell.remove();
     }
+    if (Array.isArray(this.colWidths) && this.colWidths.length) {
+      this.colWidths.splice(index - 1, 1);
+    }
+    this.applyColumnLayout();
+    this.syncColumnResizeHandles();
     const addColButton = this.wrapper.querySelector(`.${CSS.addColumn}`);
     if (addColButton) {
       addColButton.classList.remove(CSS.addColumnDisabled);
@@ -969,6 +1133,8 @@ export default class Table {
     }
 
     this.addHeadingAttrToFirstRow();
+    this.applyColumnLayout();
+    this.syncColumnResizeHandles();
   }
 
   /**
@@ -1080,10 +1246,22 @@ export default class Table {
       const row = this.getRow(rowIndex);
       const cells = Array.from(row.querySelectorAll(`.${CSS.cell}`));
 
-      rows.push(cells.map((cell) => (cell && typeof cell.innerHTML === 'string' ? cell.innerHTML : '')));
+      rows.push(cells.map((cell) => this.getCellInnerHTMLForSave(cell)));
     }
 
     return rows;
+  }
+
+  getCellInnerHTMLForSave(cell) {
+    if (!cell || typeof cell.innerHTML !== 'string') {
+      return '';
+    }
+
+    const clone = cell.cloneNode(true);
+
+    clone.querySelectorAll(`.${CSS.columnResizeHandle}`).forEach((handle) => handle.remove());
+
+    return clone.innerHTML;
   }
 
   /**
@@ -1730,10 +1908,16 @@ export default class Table {
         continue;
       }
 
-      data.push(cells.map(cell => cell.innerHTML));
+      data.push(cells.map(cell => this.getCellInnerHTMLForSave(cell)));
     }
 
     return data;
+  }
+
+  getColumnWidths() {
+    const widths = this.normalizeColumnWidths(this.numberOfColumns);
+
+    return widths ? widths.slice() : [];
   }
 
   /**

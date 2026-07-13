@@ -67,6 +67,7 @@ export default class TableBlock {
     this.data = {
       withHeadings: this.getConfig('withHeadings', false, data),
       stretched: this.getConfig('stretched', false, data),
+      colWidths: Array.isArray(data && data.colWidths) ? data.colWidths : [],
       content: data && data.content ? data.content : []
     };
     this.table = null;
@@ -152,11 +153,16 @@ export default class TableBlock {
   save() {
     const tableContent = this.table.getData();
 
+    const columnWidths = this.table.getColumnWidths();
     const result = {
       withHeadings: this.data.withHeadings,
       stretched: this.data.stretched,
       content: tableContent
     };
+
+    if (columnWidths.length) {
+      result.colWidths = columnWidths;
+    }
 
     return result;
   }
@@ -272,6 +278,7 @@ export default class TableBlock {
     this.data = {
       withHeadings: pastedData.withHeadings,
       stretched: this.data.stretched,
+      colWidths: [],
       content: pastedData.content
     };
 

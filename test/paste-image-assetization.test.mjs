@@ -229,16 +229,17 @@ test('table styles constrain inline images to a consistent thumbnail box', () =>
   assert.match(stylesSource, /\n\s+img\s*\{/);
   assert.match(stylesSource, /max-width:\s*var\(--cell-image-max-width\)/);
   assert.match(stylesSource, /max-height:\s*var\(--cell-image-max-height\)/);
-  assert.match(stylesSource, /margin:\s*0 auto/);
+  assert.match(stylesSource, /margin:\s*0/);
   assert.match(stylesSource, /object-fit:\s*contain/);
   assert.match(stylesSource, /cursor:\s*zoom-in/);
 });
 
-test('table source opens uploaded image urls in a new tab on click', () => {
+test('table source opens uploaded image urls in the built-in preview overlay', () => {
   const tableSource = fs.readFileSync(path.join(process.cwd(), 'src', 'table.js'), 'utf8');
 
   assert.match(tableSource, /handleImageClick/);
-  assert.match(tableSource, /window\.open\(src,\s*'_blank',\s*'noopener,noreferrer'\)/);
+  assert.match(tableSource, /openImagePreview\(src/);
+  assert.match(tableSource, /CSS\.imagePreviewOpen/);
 });
 
 test('table source normalizes excel image wrappers before rendering saved cell html', () => {
@@ -252,6 +253,22 @@ test('table source sizes ragged saved content by the widest row', () => {
 
   assert.match(tableSource, /content\.reduce\(\(max,\s*row\)/);
   assert.match(tableSource, /Array\.isArray\(row\)\s*\?\s*Math\.max\(max,\s*row\.length\)/);
+});
+
+test('table source supports persisted manual column widths', () => {
+  const pluginSource = fs.readFileSync(path.join(process.cwd(), 'src', 'plugin.js'), 'utf8');
+  const tableSource = fs.readFileSync(path.join(process.cwd(), 'src', 'table.js'), 'utf8');
+  const stylesSource = fs.readFileSync(path.join(process.cwd(), 'src', 'styles', 'table.pcss'), 'utf8');
+
+  assert.match(pluginSource, /colWidths:\s*Array\.isArray\(data && data\.colWidths\)/);
+  assert.match(pluginSource, /result\.colWidths\s*=\s*columnWidths/);
+  assert.match(tableSource, /getColumnTemplate\(\)/);
+  assert.match(tableSource, /gridTemplateColumns\s*=\s*template/);
+  assert.match(tableSource, /startColumnResize\(event,\s*cellIndex\)/);
+  assert.match(tableSource, /getCellInnerHTMLForSave/);
+  assert.match(tableSource, /querySelectorAll\(`\.\$\{CSS\.columnResizeHandle\}`\)/);
+  assert.match(stylesSource, /\.tc-column-resize-handle/);
+  assert.match(stylesSource, /cursor:\s*col-resize/);
 });
 
 test('keeps original cell HTML when no uploader is configured', async () => {
