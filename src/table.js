@@ -2,6 +2,7 @@ import Toolbox from './toolbox';
 import * as $ from './utils/dom';
 import throttled from './utils/throttled';
 import { assetizeTableCellElement, normalizeTableCellHtml } from './pasteImageAssetization.mjs';
+import { keepKeyInsideCell } from './keyboard.mjs';
 
 import {
   IconDirectionLeftDown,
@@ -1586,15 +1587,13 @@ export default class Table {
   };
 
   /**
-   * Prevents tab keydown event from bubbling
-   * so that it only works inside the table
+   * Prevents cell-local keydown events from bubbling to Editor.js.
+   * Native behavior is preserved, so Backspace still edits the current cell.
    *
    * @param {KeyboardEvent} event - keydown event
    */
   onKeyDownListener(event) {
-    if (event.key === 'Tab') {
-      event.stopPropagation();
-    }
+    keepKeyInsideCell(event);
   }
 
   /**
